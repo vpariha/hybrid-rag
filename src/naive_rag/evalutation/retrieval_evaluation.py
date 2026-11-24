@@ -3,10 +3,12 @@ import math
 from pathlib import Path
 from typing import Any
 
-from langchain_chroma import Chroma
+from langchain_community.vectorstores import LanceDB
 from langchain_core.documents import Document
 
-from naive_rag.persistance.vector_store import get_vectore_store
+from naive_rag.model.model import get_embedding_model
+from naive_rag.persistance.vector_store import get_lancedb_vectore_store
+from naive_rag.retrival.hybrid_retriever import LanceDBHybridRetriever
 
 
 def load_dataset(dataset_path: Path) -> list[dict[str, Any]]:
@@ -18,6 +20,8 @@ def get_chunk_ids_from_documents(documents: list[Document]) -> list[str]:
     chunk_ids: list[str] = []
     for document in documents:
         chunk_id = document.metadata.get("chunk_id")
+        if not chunk_id:
+            chunk_id = document.metadata.get("id")
         chunk_ids.append(chunk_id)
     return chunk_ids
 
@@ -81,20 +85,28 @@ def _average_metrics(
 
 
 def evaluate_dataset(
-    dataset: list[dict[str, Any]], vector_store: Chroma, k: int = 5
+    dataset: list[dict[str, Any]], vector_store: LanceDB, k: int = 5
 ) -> dict[str, Any]:
 
     results: dict[str, list[dict[str, float]]] = {
         "similarity": [],
+        "sparse": [],
         "mmr": [],
+        "hybrid": [],
     }
 
     for item in dataset:
         query = item["query"]
+        print(f"{query}" + "")
         relevance_scores = item["relevance_scores"]
+        hybrid_retriever = LanceDBHybridRetriever(
+            vector_store=vector_store,
+            embeddings=get_embedding_model(),
+            k=k,
+        )
 
         similarity_ids = get_chunk_ids_from_documents(
-            get_vectore_store().similarity_search(query, k=k)
+            vector_store.similarity_search(query, k=k)
         )
 
         mmr_ids = get_chunk_ids_from_documents(
@@ -102,6 +114,18 @@ def evaluate_dataset(
                 query, k=k, fetch_k=max(20, k * 4)
             )
         )
+        bm25_rows = (
+            vector_store.get_table()
+            .search(query, query_type="fts", fts_columns="text")
+            .limit(k)
+            .to_list()
+        )
+        bm25_ids = [row.get("chunk_id") or row.get("id") for row in bm25_rows]
+        results["sparse"].append(calculate_metrics(relevance_scores, bm25_ids, k))
+
+        hybrid_ids = get_chunk_ids_from_documents(hybrid_retriever.invoke(query))
+
+        results["hybrid"].append(calculate_metrics(relevance_scores, hybrid_ids, k))
         results["similarity"].append(
             calculate_metrics(relevance_scores, similarity_ids, k)
         )
@@ -111,12 +135,14 @@ def evaluate_dataset(
         "queries_evaluated": len(dataset),
         "k": k,
         "similarity": _average_metrics(results["similarity"], len(dataset)),
+        "sparse": _average_metrics(results["sparse"], len(dataset)),
         "mmr": _average_metrics(results["mmr"], len(dataset)),
+        "hybrid": _average_metrics(results["hybrid"], len(dataset)),
     }
 
 
 def main() -> None:
-    vector_store = get_vectore_store()
+    vector_store = get_lancedb_vectore_store()
 
     dataset = load_dataset(Path("evaluation.json"))
     metrics = evaluate_dataset(dataset, vector_store, k=5)

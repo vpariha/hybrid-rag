@@ -35,7 +35,7 @@ def main() -> None:
 
     gr.ChatInterface(
         fn=respond,
-        title="Naive RAG - Ask a question",
+        title="Hybrid RAG - Ask a question",
     ).launch()
 
 

@@ -7,12 +7,12 @@ from langchain_docling import DoclingLoader
 from langchain_docling.loader import ExportType
 from langchain_text_splitters import MarkdownTextSplitter
 
-from naive_rag.persistance.vector_store import get_vectore_store
+from naive_rag.persistance.vector_store import get_lancedb_vectore_store
 
 
 class IngestionService:
     def __init__(self):
-        self.vector_store = get_vectore_store()
+        self.vector_store = get_lancedb_vectore_store()
 
     def ingest_data_using_dolcing(self, path: str):
 
@@ -34,7 +34,7 @@ class IngestionService:
                     }
                 )
 
-        documents.extend(loaded_documents)
+            documents.extend(loaded_documents)
 
         chunks = self.convert_documents_to_chunks(documents)
         self.save_chunks_in_batch(chunks)
@@ -45,6 +45,8 @@ class IngestionService:
         self.save_chunks_in_batch(chunks)
 
     def save_chunks_in_batch(self, chunks: list[Document]) -> None:
+        for chunk in chunks:
+            print(chunk.metadata["chunk_id"])
         for start in range(0, len(chunks), 10):
             batch = chunks[start : start + 10]
             ids = [chunk.metadata["chunk_id"] for chunk in batch]
@@ -131,7 +133,7 @@ class IngestionService:
                 digest.update(block)
 
         file_hash = digest.hexdigest()
-        source_key = pdf_path.resolve().as_posix()
+        source_key = pdf_path._raw_paths[0]
         identity = f"{source_key}\0{file_hash}".encode()
         document_id = "document_" + hashlib.sha256(identity).hexdigest()
 

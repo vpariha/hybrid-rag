@@ -4,14 +4,15 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 
 from naive_rag.config.setting import AppConfig
-from naive_rag.model.model import get_chat_model
-from naive_rag.persistance.vector_store import get_vectore_store
+from naive_rag.model.model import get_chat_model, get_embedding_model
+from naive_rag.persistance.vector_store import get_lancedb_vectore_store
+from naive_rag.retrival.hybrid_retriever import LanceDBHybridRetriever
 
 
 class RetriverService:
     def __init__(self, app_config: AppConfig):
         self.app_config = app_config
-        self.vector_store = get_vectore_store()
+        self.vector_store = get_lancedb_vectore_store()
         self.chat_model = get_chat_model()
 
     def format_docs_with_metadata(self, documents: list[Document]) -> str:
@@ -42,8 +43,14 @@ class RetriverService:
             """
         )
 
-        retrieve = self.vector_store.as_retriever(
-            search_type="similarity", search_kwargs={"k": self.app_config.TOP_K}
+        # retrieve = self.vector_store.as_retriever(
+        #     search_type="similarity", search_kwargs={"k": self.app_config.TOP_K}
+        # )
+
+        retrieve = LanceDBHybridRetriever(
+            vector_store=self.vector_store,
+            embeddings=get_embedding_model(),
+            k=self.app_config.TOP_K,
         )
         chain = (
             {

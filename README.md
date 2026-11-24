@@ -1,24 +1,65 @@
-# Naive RAG
+# Hybrid RAG
 
-Naive RAG is a Python-based retrieval-augmented generation application for asking questions about PDF documents. It extracts PDF content with Docling, splits it into Markdown chunks, stores embeddings in ChromaDB, retrieves relevant chunks, and generates grounded answers in a Gradio chat interface.
+Hybrid RAG is a Python retrieval-augmented generation application for asking questions about PDF documents. It converts PDFs with Docling, splits the Markdown into chunks, stores embeddings in LanceDB, combines vector and full-text retrieval, reranks candidates with a cross-encoder, and generates grounded answers in a Gradiocle chat interface.
 
 ![Screenshot](Screenshot.png)
+
+## Langsmith trace
+
+![Screenshot](Screenshot1.png)
+
+## Evaluation metrics
+
+```json
+{
+  "queries_evaluated": 67,
+  "k": 5,
+  "similarity": {
+    "recall_at_5": 0.42288557213930345,
+    "precision_at_5": 0.11343283582089553,
+    "mrr": 0.38656716417910447,
+    "ndcg_at_5": 0.3686124628832584
+  },
+  "sparse": {
+    "recall_at_5": 0.7450248756218905,
+    "precision_at_5": 0.18507462686567164,
+    "mrr": 0.714179104477612,
+    "ndcg_at_5": 0.6948259860837872
+  },
+  "mmr": {
+    "recall_at_5": 0.46766169154228854,
+    "precision_at_5": 0.11940298507462686,
+    "mrr": 0.39875621890547264,
+    "ndcg_at_5": 0.380454226411776
+  },
+  "hybrid": {
+    "recall_at_5": 0.7189054726368159,
+    "precision_at_5": 0.18507462686567164,
+    "mrr": 0.7082089552238806,
+    "ndcg_at_5": 0.6753480847363774
+  }
+}
+```
 
 ## Features
 
 - PDF document ingestion with Docling
 - Markdown chunking with deterministic document and chunk IDs
-- Persistent cosine-similarity vector storage with ChromaDB
+- Persistent LanceDB vector and full-text storage
 - Hugging Face embeddings
+- LanceDB hybrid search with reciprocal-rank fusion
+- Cross-encoder reranking
 - Streaming answers from OpenRouter, OpenAI, Ollama, or another LangChain chat provider
 - A citation-aware chat prompt
-- Retrieval evaluation utilities for similarity search and MMR
+- Retrieval evaluation utilities for similarity, sparse, MMR, and hybrid search
+- Optional legacy ChromaDB vector-store support
 
 ## Tech Stack
 
 - Python 3.14
 - LangChain
-- ChromaDB
+- LanceDB
+- Sentence Transformers
 - Hugging Face Sentence Transformers
 - Docling
 - Gradio
@@ -33,10 +74,11 @@ src/naive_rag/
 ├── ingestion/
 │   └── ingestion_service.py
 ├── persistance/
-│   └── vector_store.py     # Persistent ChromaDB vector store
+│   └── vector_store.py     # LanceDB and legacy ChromaDB stores
 ├── model/
 │   └── model.py            # Embedding and chat model factories
 ├── retrival/
+│   ├── hybrid_retriever.py # LanceDB hybrid search and reranking
 │   └── retriver_service.py # Retrieval chain and answer prompt
 ├── evalutation/
 │   ├── generate_eval_questions.py
@@ -51,15 +93,15 @@ src/naive_rag/
 - Python 3.14
 - [`uv`](https://docs.astral.sh/uv/)
 - An API key if the selected chat provider requires one
-- Enough disk space for embeddings and the persistent ChromaDB database
+- Enough disk space for embedding models and the LanceDB database
 
 ## Installation
 
 Clone the repository and install the locked dependencies:
 
 ```bash
-git clone https://github.com/vpariha/naive-rag.git
-cd naive-rag
+git clone https://github.com/vpariha/hybrid-rag.git
+cd hybrid-rag
 uv sync
 ```
 
@@ -68,14 +110,18 @@ uv sync
 Create a `.env` file in the repository root. The application loads environment variables with `python-dotenv`.
 
 ```dotenv
-# Vector database
+# LanceDB vector and hybrid search store
+LANCEDB_URI=./lancedb
+LANCEDB_TABLE_NAME=documents
+
+# Optional legacy ChromaDB settings
 CHROMA_PERSIST_DIRECTORY=./chroma_db
 CHROMA_COLLECTION_NAME=my_collection
 
 # Retrieval
 TOP_K=5
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 100
+RERANK_CANDIDATE_K=20
+RERANKER_MODEL_NAME=cross-encoder/ms-marco-MiniLM-L-6-v2
 
 # Embeddings
 EMBEDDING_MODEL_PROVIDER=huggingface
@@ -96,16 +142,20 @@ Other provider-specific environment variables, such as `OPENAI_API_KEY`, can be 
 
 ### Supported Configuration Fields
 
-| Variable                   | Purpose                                      | Example                                  |
-| -------------------------- | -------------------------------------------- | ---------------------------------------- |
-| `CHROMA_PERSIST_DIRECTORY` | Directory used for persistent vector storage | `./chroma_db`                            |
-| `CHROMA_COLLECTION_NAME`   | ChromaDB collection name                     | `my_collection`                          |
-| `TOP_K`                    | Number of chunks retrieved per question      | `5`                                      |
-| `EMBEDDING_MODEL_PROVIDER` | LangChain embeddings provider                | `huggingface`                            |
-| `EMBEDDING_MODEL_NAME`     | Embedding model identifier                   | `sentence-transformers/all-MiniLM-L6-v2` |
-| `CHAT_MODEL_PROVIDER`      | LangChain chat provider                      | `openrouter`                             |
-| `CHAT_MODEL_NAME`          | Chat model identifier                        | `openrouter/free`                        |
-| `CHAT_MODEL_TEMPERATURE`   | Chat model sampling temperature              | `0.5`                                    |
+| Variable                   | Purpose                                            | Example                                  |
+| -------------------------- | -------------------------------------------------- | ---------------------------------------- |
+| `LANCEDB_URI`              | LanceDB storage URI                                | `./lancedb`                              |
+| `LANCEDB_TABLE_NAME`       | LanceDB table name                                 | `documents`                              |
+| `CHROMA_PERSIST_DIRECTORY` | Directory used for persistent vector storage       | `./chroma_db`                            |
+| `CHROMA_COLLECTION_NAME`   | ChromaDB collection name                           | `my_collection`                          |
+| `TOP_K`                    | Number of chunks retrieved per question            | `5`                                      |
+| `RERANK_CANDIDATE_K`       | Candidate count loaded for reranking configuration | `20`                                     |
+| `RERANKER_MODEL_NAME`      | Cross-encoder used for reranking                   | `cross-encoder/ms-marco-MiniLM-L-6-v2`   |
+| `EMBEDDING_MODEL_PROVIDER` | LangChain embeddings provider                      | `huggingface`                            |
+| `EMBEDDING_MODEL_NAME`     | Embedding model identifier                         | `sentence-transformers/all-MiniLM-L6-v2` |
+| `CHAT_MODEL_PROVIDER`      | LangChain chat provider                            | `openrouter`                             |
+| `CHAT_MODEL_NAME`          | Chat model identifier                              | `openrouter/free`                        |
+| `CHAT_MODEL_TEMPERATURE`   | Chat model sampling temperature                    | `0.5`                                    |
 
 ## Ingest Documents
 
@@ -120,7 +170,7 @@ The ingestion process:
 1. Discovers all PDF files below the source directory.
 2. Converts each PDF to Markdown with Docling.
 3. Generates stable document and chunk hashes.
-4. Stores chunks in batches of 10 in ChromaDB.
+4. Stores chunks in batches of 10 in LanceDB.
 
 Re-running ingestion reuses the same deterministic chunk IDs.
 
@@ -136,7 +186,7 @@ Open the local URL printed by Gradio, place a question in the chat input, and re
 
 ## Retrieval Evaluation
 
-The evaluation utilities can generate a labeled question dataset and compare similarity search with maximum marginal relevance (MMR).
+The evaluation utilities can generate a labeled question dataset and compare dense similarity, sparse/full-text search, maximum marginal relevance (MMR), and hybrid retrieval.
 
 Generate evaluation questions from ingested chunks by calling `generate_eval_question(context, question_count)` from `generate_eval_questions.py`. Results are appended to `evaluation.json`.
 
@@ -153,7 +203,7 @@ The evaluation reports:
 - Mean Reciprocal Rank
 - NDCG@K
 
-Both retrieval strategies are evaluated with `K=5` by default.
+All four retrieval strategies are evaluated with `K=5` by default.
 
 ## How It Works
 
@@ -162,8 +212,11 @@ PDFs
   -> Docling Markdown conversion
   -> Markdown chunk splitting
   -> Hugging Face embeddings
-  -> Persistent ChromaDB collection
-  -> Top-K similarity retrieval
+  -> Persistent LanceDB table
+  -> Vector and full-text search
+  -> Reciprocal-rank fusion
+  -> Cross-encoder reranking
+  -> Top-K hybrid retrieval
   -> Prompt with retrieved context
   -> Streaming chat model response
 ```
